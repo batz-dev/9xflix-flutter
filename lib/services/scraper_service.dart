@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:crypto/crypto.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:html/dom.dart' as dom;
 import '../models/movie.dart';
@@ -578,6 +579,79 @@ class ScraperService {
     } catch (e) {
       return MirrorLinks(status: 'error', error: e.toString());
     }
+  }
+
+  // Resolve Gofile direct streaming link
+  Future<String?> resolveGofileDirect(String gofileUrl, {String? fileName}) async {
+    final backend = effectiveBackend;
+    if (backend != null && backend.isNotEmpty) {
+      try {
+        final query = 'url=${Uri.encodeQueryComponent(gofileUrl)}${fileName != null ? '&name=${Uri.encodeQueryComponent(fileName)}' : ''}';
+        final uri = Uri.parse('$backend/api/resolve-gofile?$query');
+        final resp = await http.get(uri).timeout(const Duration(seconds: 10));
+        if (resp.statusCode == 200) {
+          final data = json.decode(resp.body);
+          if (data['status'] == 'success' && data['direct_url'] != null) {
+            return data['direct_url'] as String;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Direct client-side Gofile resolution fallback
+    try {
+      final cid = gofileUrl.trim().replaceAll(RegExp(r'/+$'), '').split('/').last;
+      const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+      // 1. Get or create guest token
+      String token = 'Z9cln5MQGZUjMS70ryJvLsJ8bik3JLUF';
+      try {
+        final accResp = await http.post(
+          Uri.parse('https://api.gofile.io/accounts'),
+          headers: {'User-Agent': ua},
+        ).timeout(const Duration(seconds: 5));
+        if (accResp.statusCode == 200) {
+          final accData = json.decode(accResp.body);
+          final t = accData['data']?['token'];
+          if (t != null && t.toString().isNotEmpty) {
+            token = t.toString();
+          }
+        }
+      } catch (_) {}
+
+      // 2. Generate Website Token
+      final timeSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final w = timeSec ~/ 14400;
+      final raw = '$ua::en-US::$token::$w::12af056dacea0b';
+      final wt = sha256.convert(utf8.encode(raw)).toString();
+
+      // 3. Fetch content
+      final contentResp = await http.get(
+        Uri.parse('https://api.gofile.io/contents/$cid?page=1&pageSize=100&sortField=name&sortDirection=1'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'X-Website-Token': wt,
+          'X-BL': 'en-US',
+          'User-Agent': ua,
+          'Accept': '*/*',
+          'Origin': 'https://gofile.io',
+          'Referer': 'https://gofile.io/',
+        },
+      ).timeout(const Duration(seconds: 8));
+
+      if (contentResp.statusCode == 200) {
+        final cData = json.decode(contentResp.body);
+        if (cData['status'] == 'ok' && cData['data']?['children'] != null) {
+          for (final child in (cData['data']['children'] as Map).values) {
+            if (child is Map && child['link'] != null) {
+              return child['link'] as String;
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    return null;
   }
 
   // Parse movie cards helper

@@ -2,10 +2,12 @@ import os
 import sys
 import re
 import json
+import time
+import hashlib
 import urllib.parse
 import requests
 from bs4 import BeautifulSoup
-from flask import Flask, send_from_directory, request, jsonify
+from flask import Flask, send_from_directory, request, jsonify, Response
 
 # Add 9xflix to sys.path to access the scraper engine
 SYS_9XFLIX = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '9xflix'))
@@ -312,6 +314,122 @@ def api_resolve():
     url = request.args.get('url', '').strip()
     data = universal_resolve(url)
     return jsonify(data)
+
+_gofile_account_token = 'Z9cln5MQGZUjMS70ryJvLsJ8bik3JLUF'
+_gofile_token_time = 0
+
+def resolve_gofile(gofile_url: str):
+    global _gofile_account_token, _gofile_token_time
+    cid = gofile_url.strip().rstrip('/').split('/')[-1]
+    ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+    
+    now = time.time()
+    if not _gofile_account_token or (now - _gofile_token_time) > 43200:
+        try:
+            s = requests.Session()
+            r_acc = s.post('https://api.gofile.io/accounts', headers={'User-Agent': ua}, timeout=5)
+            if r_acc.status_code == 200:
+                t = r_acc.json().get('data', {}).get('token')
+                if t:
+                    _gofile_account_token = t
+                    _gofile_token_time = now
+        except Exception:
+            pass
+
+    token = _gofile_account_token or 'Z9cln5MQGZUjMS70ryJvLsJ8bik3JLUF'
+    w = int(now // 14400)
+    raw = f'{ua}::en-US::{token}::{w}::12af056dacea0b'
+    wt = hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+    try:
+        s = requests.Session()
+        r = s.get(f'https://api.gofile.io/contents/{cid}?page=1&pageSize=100&sortField=name&sortDirection=1', headers={
+            'Authorization': f'Bearer {token}',
+            'X-Website-Token': wt,
+            'X-BL': 'en-US',
+            'User-Agent': ua,
+            'Accept': '*/*',
+            'Origin': 'https://gofile.io',
+            'Referer': 'https://gofile.io/'
+        }, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get('status') == 'ok':
+                children = data.get('data', {}).get('children', {})
+                for child in children.values():
+                    if child.get('link'):
+                        return child.get('link'), token, child.get('name', '')
+    except Exception:
+        pass
+    return None, None, None
+
+@app.route('/api/resolve-gofile')
+def api_resolve_gofile():
+    url = request.args.get('url', '').strip()
+    name = request.args.get('name', '').strip()
+    if not url:
+        return jsonify({'status': 'error', 'error': 'Missing url parameter'}), 400
+
+    link, token, resolved_name = resolve_gofile(url)
+    if link:
+        host_prefix = request.host_url.rstrip('/')
+        final_name = name or resolved_name or 'movie.mkv'
+        dl_url = f"{host_prefix}/api/gofile-dl?link={urllib.parse.quote(link, safe='')}&token={token}&name={urllib.parse.quote(final_name, safe='')}"
+        return jsonify({
+            'status': 'success',
+            'direct_url': dl_url,
+            'original_link': link,
+            'token': token,
+            'file_name': final_name
+        })
+    return jsonify({
+        'status': 'error',
+        'error': 'Gofile API is busy or rate limited. Please use High-Speed CDN or retry.'
+    })
+
+@app.route('/api/gofile-dl')
+def api_gofile_dl():
+    direct_link = request.args.get('link', '').strip()
+    token = request.args.get('token', '').strip()
+    file_name = request.args.get('name', 'download.mkv').strip()
+
+    if not direct_link:
+        return "Missing link parameter", 400
+
+    req_headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    }
+    if token:
+        req_headers['Cookie'] = f'accountToken={token}'
+
+    range_header = request.headers.get('Range')
+    if range_header:
+        req_headers['Range'] = range_header
+
+    try:
+        r = requests.get(direct_link, headers=req_headers, stream=True, timeout=25)
+
+        excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
+        resp_headers = [(k, v) for (k, v) in r.raw.headers.items()
+                        if k.lower() not in excluded_headers]
+
+        resp_headers.append(('Content-Disposition', f'attachment; filename="{file_name}"'))
+        resp_headers.append(('Access-Control-Allow-Origin', '*'))
+        resp_headers.append(('Accept-Ranges', 'bytes'))
+        if 'content-length' in r.headers:
+            resp_headers.append(('Content-Length', r.headers['content-length']))
+        if 'content-range' in r.headers:
+            resp_headers.append(('Content-Range', r.headers['content-range']))
+
+        def generate():
+            for chunk in r.iter_content(chunk_size=128 * 1024):
+                if chunk:
+                    yield chunk
+
+        return Response(generate(), status=r.status_code, headers=resp_headers)
+    except Exception as e:
+        return f"Streaming error: {e}", 500
+
 
 # Catch-all to serve Flutter Web SPA and its static assets
 @app.route('/', defaults={'path': ''})

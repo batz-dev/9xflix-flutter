@@ -180,4 +180,9 @@ class MoviesProvider extends ChangeNotifier {
   Future<MirrorLinks> resolveDownload(String intermediateUrl) async {
     return await _scraper.resolveDownloadLink(intermediateUrl);
   }
+
+  // Gofile Direct Link Resolver
+  Future<String?> resolveGofileDownload(String gofileUrl, {String? fileName}) async {
+    return await _scraper.resolveGofileDirect(gofileUrl, fileName: fileName);
+  }
 }

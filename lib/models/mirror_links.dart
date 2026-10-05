@@ -2,9 +2,11 @@ class MirrorLinks {
   final String status;
   final String? directLink;
   final String? linkType;
+  final String? fileName;
   final String? r2;
   final String? r2Status;
   final String? gofile;
+  final String? gofileDirect;
   final String? vikingfile;
   final String? uploadhub;
   final String? filepress;
@@ -15,9 +17,11 @@ class MirrorLinks {
     required this.status,
     this.directLink,
     this.linkType,
+    this.fileName,
     this.r2,
     this.r2Status,
     this.gofile,
+    this.gofileDirect,
     this.vikingfile,
     this.uploadhub,
     this.filepress,
@@ -32,9 +36,11 @@ class MirrorLinks {
       status: json['status'] ?? 'error',
       directLink: json['direct_link'],
       linkType: json['link_type'],
+      fileName: json['file_name'],
       r2: mirrors['r2'],
       r2Status: mirrors['r2_status'],
       gofile: mirrors['gofile'],
+      gofileDirect: mirrors['gofile_direct'],
       vikingfile: mirrors['vikingfile'],
       uploadhub: mirrors['uploadhub'],
       filepress: mirrors['filepress'],
@@ -44,5 +50,5 @@ class MirrorLinks {
   }
 
   bool get hasActiveLinks => directLink != null || (r2 != null && (r2Status == 'active' || r2Status == null)) || gofile != null || vikingfile != null || filepress != null || uploadhub != null;
-  String? get bestDownloadUrl => directLink ?? ((r2 != null && (r2Status == 'active' || r2Status == null)) ? r2 : (gofile ?? vikingfile ?? filepress));
+  String? get bestDownloadUrl => directLink ?? ((r2 != null && (r2Status == 'active' || r2Status == null)) ? r2 : (gofileDirect ?? gofile ?? vikingfile ?? filepress));
 }

@@ -5,6 +5,7 @@ import '../models/download_option.dart';
 import '../models/mirror_links.dart';
 import '../providers/movies_provider.dart';
 import '../services/download_manager.dart';
+import '../services/platform/download_storage.dart';
 import '../constants/app_theme.dart';
 
 class DownloadBottomSheet extends StatefulWidget {
@@ -27,6 +28,7 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
   bool _isLoading = true;
   MirrorLinks? _links;
   String? _error;
+  String? _resolvingMirror;
 
   @override
   void initState() {
@@ -93,6 +95,63 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
           ),
         ),
       );
+    }
+  }
+
+  Future<void> _handleGofileDownload(String gofileUrl) async {
+    setState(() => _resolvingMirror = 'gofile');
+    try {
+      final provider = Provider.of<MoviesProvider>(context, listen: false);
+      final directUrl = await provider.resolveGofileDownload(
+        gofileUrl,
+        fileName: '${widget.movieTitle}_${widget.option.quality}.mkv',
+      );
+
+      if (!mounted) return;
+
+      if (directUrl != null && directUrl.isNotEmpty) {
+        _triggerDownload(directUrl);
+      } else if (_links?.bestDownloadUrl != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: AppTheme.surfaceElevated,
+            content: Text('Starting high-speed direct CDN download...'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+        _triggerDownload(_links!.bestDownloadUrl!);
+      } else {
+        await DownloadStorage.instance.openDownloadedItem('', gofileUrl);
+      }
+    } catch (_) {
+      if (mounted && _links?.bestDownloadUrl != null) {
+        _triggerDownload(_links!.bestDownloadUrl!);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _resolvingMirror = null);
+      }
+    }
+  }
+
+  void _handleMirrorDownload(String name, String url) {
+    if (url.contains('.mkv') ||
+        url.contains('.mp4') ||
+        url.contains('workers.dev') ||
+        url.contains('hubcloud') ||
+        url.contains('indi-files')) {
+      _triggerDownload(url);
+    } else if (_links?.bestDownloadUrl != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppTheme.surfaceElevated,
+          content: Text('Starting direct download for ${widget.movieTitle}...'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      _triggerDownload(_links!.bestDownloadUrl!);
+    } else {
+      DownloadStorage.instance.openDownloadedItem('', url);
     }
   }
 
@@ -313,10 +372,11 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
             // Gofile
             if (_links!.gofile != null)
               _buildMirrorRow(
-                name: 'Gofile High-Speed Mirror',
+                name: 'Gofile Fast Mirror',
                 icon: Icons.cloud_rounded,
                 color: AppTheme.accentBlue,
                 url: _links!.gofile!,
+                isGofile: true,
               ),
 
             // VikingFile
@@ -381,7 +441,10 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
     required IconData icon,
     required Color color,
     required String url,
+    bool isGofile = false,
   }) {
+    final isResolvingThis = _resolvingMirror == (isGofile ? 'gofile' : name);
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -395,25 +458,68 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
           Icon(icon, color: color, size: 20),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              name,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Text(
+                  isGofile ? 'Direct Fast Stream' : 'Bypassed Mirror',
+                  style: const TextStyle(
+                    color: AppTheme.textMuted,
+                    fontSize: 10,
+                  ),
+                ),
+              ],
             ),
           ),
-          ElevatedButton(
-            onPressed: () => _triggerDownload(url),
+          IconButton(
+            icon: const Icon(Icons.open_in_browser_rounded, size: 18, color: AppTheme.textMuted),
+            tooltip: 'Open in browser',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            onPressed: () => DownloadStorage.instance.openDownloadedItem('', url),
+          ),
+          const SizedBox(width: 4),
+          ElevatedButton.icon(
+            onPressed: isResolvingThis
+                ? null
+                : () {
+                    if (isGofile) {
+                      _handleGofileDownload(url);
+                    } else {
+                      _handleMirrorDownload(name, url);
+                    }
+                  },
+            icon: isResolvingThis
+                ? const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.download_rounded, size: 14),
+            label: Text(
+              isResolvingThis ? 'Resolving...' : 'Download',
+              style: TextStyle(
+                color: isResolvingThis ? AppTheme.textMuted : color,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.surface,
               side: BorderSide(color: color.withOpacity(0.5)),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               minimumSize: const Size(0, 32),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: Text('Get', style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
