@@ -423,74 +423,158 @@ class ScraperService {
       }
     }
 
+    // Desilinks Aggregator Unpacker
+    if (intermediateUrl.contains('desilinks')) {
+      try {
+        final resp = await http.get(Uri.parse(intermediateUrl), headers: defaultHeaders).timeout(const Duration(seconds: 8));
+        if (resp.statusCode == 200) {
+          final doc = html_parser.parse(resp.body);
+          for (final a in doc.querySelectorAll('a')) {
+            final href = a.attributes['href'] ?? '';
+            if (href.contains('indishare') || href.contains('indi-share') || href.contains('hubcloud')) {
+              return await resolveDownloadLink(href);
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
     try {
       final code = intermediateUrl.trim().replaceAll(RegExp(r'/+$'), '').split('/').last;
+      final baseIndishare = 'https://files.indi-share.com/$code';
 
-      // Step 1: Query Indishare mirror-link API
-      final mirrorApi = 'https://files.indi-share.com/api/mirror-link?code=$code&service=drivehub';
-      final headers = Map<String, String>.from(defaultHeaders)..['Referer'] = intermediateUrl;
+      // Indishare Token & R2 Worker
+      try {
+        final tokenResp = await http.post(
+          Uri.parse('$baseIndishare/token'),
+          headers: {
+            ...defaultHeaders,
+            'Referer': baseIndishare,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+        ).timeout(const Duration(seconds: 8));
 
-      final resp1 = await http.get(Uri.parse(mirrorApi), headers: headers).timeout(const Duration(seconds: 10));
+        if (tokenResp.statusCode == 200) {
+          final tData = json.decode(tokenResp.body);
+          if (tData['status'] == 'success' && tData['url'] != null) {
+            final dlPageUrl = tData['url'] as String;
+            final dlResp = await http.get(
+              Uri.parse(dlPageUrl),
+              headers: {...defaultHeaders, 'Referer': baseIndishare},
+            ).timeout(const Duration(seconds: 8));
 
-      if (resp1.statusCode != 200) {
-        return MirrorLinks(status: 'error', error: 'Indishare API HTTP ${resp1.statusCode}');
-      }
+            if (dlResp.statusCode == 200) {
+              final body = dlResp.body;
+              final mTok = RegExp(r'const\s+_r2Token\s*=\s*"([^"]+)"').firstMatch(body);
+              final mCod = RegExp(r'const\s+_r2Code\s*=\s*"([^"]+)"').firstMatch(body);
+              if (mTok != null && mCod != null) {
+                final r2Resp = await http.post(
+                  Uri.parse('https://files.indi-share.com/api/r2link'),
+                  headers: {
+                    ...defaultHeaders,
+                    'Referer': dlPageUrl,
+                    'Content-Type': 'application/json',
+                  },
+                  body: json.encode({'code': mCod.group(1), 'token': mTok.group(1)}),
+                ).timeout(const Duration(seconds: 8));
 
-      final data1 = json.decode(resp1.body);
-      if (data1['status'] != 'success' || data1['url'] == null) {
-        return MirrorLinks(status: 'error', error: 'Indishare could not resolve DriveHub link');
-      }
+                if (r2Resp.statusCode == 200) {
+                  final r2Data = json.decode(r2Resp.body);
+                  if (r2Data['status'] == 'success' && r2Data['url'] != null) {
+                    final res = MirrorLinks(
+                      status: 'success',
+                      directLink: r2Data['url'],
+                      linkType: 'Cloudflare R2 Direct Worker',
+                      r2: r2Data['url'],
+                      r2Status: 'active',
+                    );
+                    _resolveCache[intermediateUrl] = res;
+                    return res;
+                  }
+                }
+              }
 
-      final drivehubUrl = data1['url'] as String;
-      final fileId = drivehubUrl.trim().replaceAll(RegExp(r'/+$'), '').split('/').last;
+              for (final m in RegExp(r'''openDownload\(\s*['"]([^'"]+)['"]''').allMatches(body)) {
+                final mUrl = m.group(1);
+                if (mUrl != null && (mUrl.contains('indi-files') || mUrl.contains('gofile') || mUrl.contains('vikingfile'))) {
+                  final res = MirrorLinks(
+                    status: 'success',
+                    directLink: mUrl,
+                    linkType: mUrl.contains('indi-files') ? 'IndiFiles Direct CDN' : 'Fast Mirror',
+                  );
+                  _resolveCache[intermediateUrl] = res;
+                  return res;
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
 
-      // Step 2: Query DriveHub mirror-status API
-      final statusApi = 'https://new1.drivehub.dad/system/ajax/mirror-status.php?id=$fileId';
-      final headers2 = Map<String, String>.from(defaultHeaders)..['Referer'] = drivehubUrl;
+      // Fallback: DriveHub mirror-link API
+      try {
+        final mirrorApi = 'https://files.indi-share.com/api/mirror-link?code=$code&service=drivehub';
+        final headers = Map<String, String>.from(defaultHeaders)..['Referer'] = intermediateUrl;
 
-      final resp2 = await http.get(Uri.parse(statusApi), headers: headers2).timeout(const Duration(seconds: 10));
+        final resp1 = await http.get(Uri.parse(mirrorApi), headers: headers).timeout(const Duration(seconds: 10));
+        if (resp1.statusCode == 200) {
+          final data1 = json.decode(resp1.body);
+          if (data1['status'] == 'success' && data1['url'] != null) {
+            final drivehubUrl = data1['url'] as String;
+            final fileId = drivehubUrl.trim().replaceAll(RegExp(r'/+$'), '').split('/').last;
 
-      if (resp2.statusCode != 200) {
-        return MirrorLinks(status: 'error', error: 'DriveHub status API HTTP ${resp2.statusCode}');
-      }
+            final statusApi = 'https://new1.drivehub.dad/system/ajax/mirror-status.php?id=$fileId';
+            final headers2 = Map<String, String>.from(defaultHeaders)..['Referer'] = drivehubUrl;
 
-      final mirrorsData = json.decode(resp2.body) as Map<String, dynamic>;
+            final resp2 = await http.get(Uri.parse(statusApi), headers: headers2).timeout(const Duration(seconds: 10));
+            if (resp2.statusCode == 200) {
+              final mirrorsData = json.decode(resp2.body) as Map<String, dynamic>;
 
-      String? bestDirect;
-      String? linkType;
+              String? bestDirect;
+              String? linkType;
 
-      if (mirrorsData['r2'] != null && mirrorsData['r2_status'] == 'active') {
-        bestDirect = mirrorsData['r2'];
-        linkType = 'Cloudflare R2 Direct High-Speed';
-      } else if (mirrorsData['gofile'] != null) {
-        bestDirect = mirrorsData['gofile'];
-        linkType = 'Gofile Direct Fast Mirror';
-      } else if (mirrorsData['vikingfile'] != null) {
-        bestDirect = mirrorsData['vikingfile'];
-        linkType = 'VikingFile Fast Mirror';
-      } else if (mirrorsData['filepress'] != null) {
-        bestDirect = mirrorsData['filepress'];
-        linkType = 'FilePress';
-      } else {
-        bestDirect = drivehubUrl;
-        linkType = 'DriveHub Web Link';
-      }
+              if (mirrorsData['r2'] != null && mirrorsData['r2_status'] == 'active') {
+                bestDirect = mirrorsData['r2'];
+                linkType = 'Cloudflare R2 Direct High-Speed';
+              } else if (mirrorsData['gofile'] != null) {
+                bestDirect = mirrorsData['gofile'];
+                linkType = 'Gofile Direct Fast Mirror';
+              } else if (mirrorsData['vikingfile'] != null) {
+                bestDirect = mirrorsData['vikingfile'];
+                linkType = 'VikingFile Fast Mirror';
+              } else if (mirrorsData['filepress'] != null) {
+                bestDirect = mirrorsData['filepress'];
+                linkType = 'FilePress';
+              } else {
+                bestDirect = drivehubUrl;
+                linkType = 'DriveHub Web Link';
+              }
 
-      final result = MirrorLinks(
-        status: 'success',
-        directLink: bestDirect,
-        linkType: linkType,
-        r2: mirrorsData['r2'],
-        r2Status: mirrorsData['r2_status'],
-        gofile: mirrorsData['gofile'],
-        vikingfile: mirrorsData['vikingfile'],
-        uploadhub: mirrorsData['uploadhub'],
-        filepress: mirrorsData['filepress'],
-        drivehubUrl: drivehubUrl,
+              final result = MirrorLinks(
+                status: 'success',
+                directLink: bestDirect,
+                linkType: linkType,
+                r2: mirrorsData['r2'],
+                r2Status: mirrorsData['r2_status'],
+                gofile: mirrorsData['gofile'],
+                vikingfile: mirrorsData['vikingfile'],
+                uploadhub: mirrorsData['uploadhub'],
+                filepress: mirrorsData['filepress'],
+                drivehubUrl: drivehubUrl,
+              );
+
+              _resolveCache[intermediateUrl] = result;
+              return result;
+            }
+          }
+        }
+      } catch (_) {}
+
+      return MirrorLinks(
+        status: 'error',
+        error: 'Could not automatically bypass mirror. File might be currently syncing.',
       );
-
-      _resolveCache[intermediateUrl] = result;
-      return result;
     } catch (e) {
       return MirrorLinks(status: 'error', error: e.toString());
     }

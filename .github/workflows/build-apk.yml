@@ -40,27 +40,28 @@ jobs:
 
       - name: Rename APK for Release
         run: |
-          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/FlixDirect-v1.0.0.apk
+          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/FlixDirect-v1.0.1.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: FlixDirect-Release-APK
-          path: build/app/outputs/flutter-apk/FlixDirect-v1.0.0.apk
+          path: build/app/outputs/flutter-apk/FlixDirect-v1.0.1.apk
 
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0
-          name: "FlixDirect Mobile v1.0.0"
+          tag_name: v1.0.1
+          name: "FlixDirect Mobile v1.0.1"
           body: |
-            ### 🎬 FlixDirect v1.0.0 Release
-            - **Automated Cloudflare R2 Resolver:** Bypasses 9xflix ads, timers, and shorteners.
-            - **Built-in High-Speed Downloader:** Resume support, speed meter, and chunked downloads.
-            - **Screenshots Gallery & Lightbox:** Pinch-to-zoom uncropped screenshots.
-            - **Cinematic Dark Theme:** Optimized for Android phones and tablets.
+            ### 🎬 FlixDirect v1.0.1 Update
+            - **Universal Mirror Resolver:** Full support for Desilinks, HubCloud, Indishare, and Cloudflare R2 worker endpoints.
+            - **Fixed "Could not automatically bypass" issue:** Resolves movies like *Deadpool 2*, *Deadpool & Wolverine*, *Mirzapur*, etc.
+            - **Fixed Missing Images:** Universal image proxying ensures zero CORS or broken posters.
+            - **Multi-Host Fallback:** Automatically switches between R2, IndiFiles, GoFile, and VikingFile.
+            - **Built-in Downloader:** Direct download into internal storage with speed indicator & external player playback.
           files: |
-            build/app/outputs/flutter-apk/FlixDirect-v1.0.0.apk
+            build/app/outputs/flutter-apk/FlixDirect-v1.0.1.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

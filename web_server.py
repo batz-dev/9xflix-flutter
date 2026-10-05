@@ -2,7 +2,9 @@ import os
 import sys
 import re
 import json
+import urllib.parse
 import requests
+from bs4 import BeautifulSoup
 from flask import Flask, send_from_directory, request, jsonify
 
 # Add 9xflix to sys.path to access the scraper engine
@@ -27,10 +29,54 @@ def add_cors_headers(response):
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
     return response
 
+def make_proxy_img(u: str, host_prefix: str) -> str:
+    if not u or not u.startswith('http'):
+        return u
+    if '/api/image-proxy' in u:
+        return u
+    return f"{host_prefix}/api/image-proxy?url={urllib.parse.quote(u, safe='')}"
+
+def rewrite_movie_images(movie_dict: dict, host_prefix: str):
+    if 'poster' in movie_dict and movie_dict['poster']:
+        movie_dict['poster'] = make_proxy_img(movie_dict['poster'], host_prefix)
+    if 'screenshots' in movie_dict and isinstance(movie_dict['screenshots'], list):
+        movie_dict['screenshots'] = [make_proxy_img(ss, host_prefix) for ss in movie_dict['screenshots']]
+
+@app.route('/api/image-proxy')
+def api_image_proxy():
+    img_url = request.args.get('url', '').strip()
+    if not img_url or not img_url.startswith('http'):
+        return "Missing or invalid url", 400
+
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://9xflix.esq/'
+        }
+        resp = requests.get(img_url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            return f"Upstream error {resp.status_code}", 502
+
+        content_type = resp.headers.get('content-type', 'image/jpeg')
+        response = app.response_class(
+            resp.content,
+            status=200,
+            mimetype=content_type
+        )
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Cache-Control'] = 'public, max-age=604800'
+        return response
+    except Exception as e:
+        return str(e), 500
+
 @app.route('/api/latest')
 def api_latest():
     page = request.args.get('page', 1, type=int)
     data = get_latest_movies(page=page)
+    host_prefix = request.host_url.rstrip('/')
+    if 'movies' in data:
+        for m in data['movies']:
+            rewrite_movie_images(m, host_prefix)
     return jsonify(data)
 
 @app.route('/api/search')
@@ -38,16 +84,21 @@ def api_search():
     q = request.args.get('q', '').strip()
     page = request.args.get('page', 1, type=int)
     data = search_movies(query=q, page=page)
+    host_prefix = request.host_url.rstrip('/')
+    if 'movies' in data:
+        for m in data['movies']:
+            rewrite_movie_images(m, host_prefix)
     return jsonify(data)
 
 @app.route('/api/detail')
 def api_detail():
     slug = request.args.get('slug', '').strip()
     data = get_movie_details(slug)
+    host_prefix = request.host_url.rstrip('/')
+    rewrite_movie_images(data, host_prefix)
     return jsonify(data)
 
-def smart_resolve_download_link(intermediate_url: str) -> dict:
-    code = intermediate_url.rstrip('/').split('/')[-1]
+def universal_resolve(intermediate_url: str) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer': 'https://9xflix.esq/'
@@ -64,9 +115,67 @@ def smart_resolve_download_link(intermediate_url: str) -> dict:
         'error': None
     }
 
-    # Tier 1: Indishare Direct Cloudflare R2 Worker (/token -> /api/r2link)
+    clean_url = intermediate_url.strip()
+
+    # 1. Desilinks / Wrapper aggregator handler (Deadpool 2, older movies, collections)
+    if 'desilinks' in clean_url:
+        try:
+            r = s.get(clean_url, headers=headers, timeout=8)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            target_urls = []
+            for a in soup.find_all('a'):
+                href = a.get('href', '')
+                if any(k in href.lower() for k in ['indishare', 'hubcloud', 'indi-share', 'gofile']):
+                    target_urls.append(href)
+
+            # Prioritize indishare, then hubcloud
+            target_urls.sort(key=lambda u: 0 if ('indishare' in u or 'indi-share' in u) else 1)
+            for t_url in target_urls:
+                sub_res = universal_resolve(t_url)
+                if sub_res.get('status') == 'success' and sub_res.get('direct_link'):
+                    sub_res['intermediate_url'] = intermediate_url
+                    return sub_res
+        except Exception:
+            pass
+
+    # 2. HubCloud handler
+    if 'hubcloud' in clean_url:
+        try:
+            r = s.get(clean_url, headers={'User-Agent': headers['User-Agent'], 'Referer': 'https://desilinks.org/'}, timeout=8)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            gen_url = None
+            for a in soup.find_all('a'):
+                href = a.get('href', '')
+                if 'gamerxyt.com/hubcloud.php' in href or 'hubcloud.php' in href:
+                    gen_url = href
+                    break
+            if gen_url:
+                r_gen = s.get(gen_url, headers={'User-Agent': headers['User-Agent'], 'Referer': clean_url}, timeout=8)
+                soup_gen = BeautifulSoup(r_gen.text, 'html.parser')
+                for a in soup_gen.find_all('a'):
+                    href = a.get('href', '')
+                    if 'gpdl.hubcloud.ist' in href:
+                        result['status'] = 'success'
+                        result['direct_link'] = href
+                        result['link_type'] = 'HubCloud 10Gbps Direct CDN'
+                        result['mirrors']['r2'] = href
+                        result['mirrors']['r2_status'] = 'active'
+                        result['mirrors']['hubcloud'] = href
+                    elif 'pixeldrain' in href:
+                        result['mirrors']['pixeldrain'] = href
+                        if not result['direct_link']:
+                            result['direct_link'] = href
+                            result['link_type'] = 'PixelDrain Direct Mirror'
+                if result['direct_link']:
+                    result['status'] = 'success'
+                    return result
+        except Exception:
+            pass
+
+    # 3. Indishare Handler (Direct R2 Worker + openDownload mirrors + status API)
+    code = clean_url.rstrip('/').split('/')[-1]
+    base_indishare = f'https://files.indi-share.com/{code}'
     try:
-        base_indishare = f'https://files.indi-share.com/{code}'
         r_page = s.get(base_indishare, headers=headers, timeout=8)
         if r_page.status_code == 200:
             m_title = re.search(r'<title>\s*(.*?)\s*—\s*Indishare</title>', r_page.text)
@@ -84,9 +193,11 @@ def smart_resolve_download_link(intermediate_url: str) -> dict:
                 token_data = r_token.json()
                 if token_data.get('status') == 'success' and token_data.get('url'):
                     dl_page_url = token_data['url']
-                    r_dl_page = s.get(dl_page_url, headers={'User-Agent': headers['User-Agent'], 'Referer': base_indishare}, timeout=8)
-                    m_tok = re.search(r'const\s+_r2Token\s*=\s*\"([^\"]+)\"', r_dl_page.text)
-                    m_cod = re.search(r'const\s+_r2Code\s*=\s*\"([^\"]+)\"', r_dl_page.text)
+                    r_dl = s.get(dl_page_url, headers={'User-Agent': headers['User-Agent'], 'Referer': base_indishare}, timeout=8)
+
+                    # 3a. Cloudflare R2 worker
+                    m_tok = re.search(r'const\s+_r2Token\s*=\s*\"([^\"]+)\"', r_dl.text)
+                    m_cod = re.search(r'const\s+_r2Code\s*=\s*\"([^\"]+)\"', r_dl.text)
                     if m_tok and m_cod:
                         r_r2 = s.post('https://files.indi-share.com/api/r2link', json={
                             'code': m_cod.group(1),
@@ -104,10 +215,29 @@ def smart_resolve_download_link(intermediate_url: str) -> dict:
                                 result['link_type'] = 'Cloudflare R2 Direct Worker'
                                 result['mirrors']['r2'] = r2_data['url']
                                 result['mirrors']['r2_status'] = 'active'
-    except Exception as e:
+
+                    # 3b. Extract openDownload mirrors (IndiFiles, GoFile, VikingFile)
+                    for m_od in re.finditer(r'openDownload\(\s*[\'\"]([^\'\"]+)[\'\"]', r_dl.text):
+                        m_url = m_od.group(1)
+                        if 'indi-files' in m_url:
+                            result['mirrors']['indifiles'] = m_url
+                            if not result['direct_link']:
+                                result['direct_link'] = m_url
+                                result['link_type'] = 'IndiFiles Direct CDN'
+                        elif 'gofile' in m_url:
+                            result['mirrors']['gofile'] = m_url
+                            if not result['direct_link']:
+                                result['direct_link'] = m_url
+                                result['link_type'] = 'Gofile Fast Mirror'
+                        elif 'vikingfile' in m_url:
+                            result['mirrors']['vikingfile'] = m_url
+                            if not result['direct_link']:
+                                result['direct_link'] = m_url
+                                result['link_type'] = 'VikingFile Fast Mirror'
+    except Exception:
         pass
 
-    # Tier 2: Indishare DriveHub mirror API
+    # 4. DriveHub mirror API
     if not result.get('direct_link'):
         try:
             mirror_api = f'https://files.indi-share.com/api/mirror-link?code={code}&service=drivehub'
@@ -121,9 +251,9 @@ def smart_resolve_download_link(intermediate_url: str) -> dict:
                     r_status = s.get(status_api, headers={'User-Agent': headers['User-Agent'], 'Referer': drivehub_url}, timeout=8)
                     if r_status.status_code == 200:
                         mirrors = r_status.json()
-                        result['status'] = 'success'
                         result['drivehub_url'] = drivehub_url
-                        result['mirrors'] = mirrors
+                        for k, v in mirrors.items():
+                            result['mirrors'][k] = v
                         if mirrors.get('r2') and mirrors.get('r2_status') == 'active':
                             result['direct_link'] = mirrors['r2']
                             result['link_type'] = 'Cloudflare R2 Direct High-Speed'
@@ -136,7 +266,7 @@ def smart_resolve_download_link(intermediate_url: str) -> dict:
         except Exception:
             pass
 
-    # Tier 3: Indishare Status API for GoFile / SendNow / R2
+    # 5. Status API fallback
     if not result.get('direct_link'):
         try:
             r_st = s.get(f'https://files.indi-share.com/api/status?code={code}', headers=headers, timeout=6)
@@ -154,10 +284,11 @@ def smart_resolve_download_link(intermediate_url: str) -> dict:
         except Exception:
             pass
 
-    # Tier 4: Fallback to original resolve_download_link
+    # 6. Fallback to original scraper.py resolve
     if not result.get('direct_link'):
         try:
-            res_orig = resolve_download_link(intermediate_url)
+            from scraper import resolve_download_link as orig_resolve
+            res_orig = orig_resolve(clean_url)
             if res_orig.get('status') == 'success' and res_orig.get('direct_link'):
                 return res_orig
         except Exception:
@@ -175,7 +306,7 @@ def smart_resolve_download_link(intermediate_url: str) -> dict:
 @app.route('/api/resolve')
 def api_resolve():
     url = request.args.get('url', '').strip()
-    data = smart_resolve_download_link(url)
+    data = universal_resolve(url)
     return jsonify(data)
 
 # Catch-all to serve Flutter Web SPA and its static assets
