@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:open_filex/open_filex.dart';
 import '../services/download_manager.dart';
 import '../models/download_item.dart';
 import '../constants/app_theme.dart';
@@ -379,7 +378,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> with SingleTickerProv
                     onPressed: () async {
                       final messenger = ScaffoldMessenger.of(context);
                       final result = await _dm.openFile(item.id);
-                      if (result.type != ResultType.done && mounted) {
+                      if (!result.success && mounted) {
                         messenger.showSnackBar(
                           SnackBar(
                             backgroundColor: AppTheme.surfaceElevated,

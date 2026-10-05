@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:html/parser.dart' as html_parser;
 import 'package:html/dom.dart' as dom;
@@ -14,6 +15,16 @@ class ScraperService {
   // Optional custom backend server URL (e.g. self-hosted FlixDirect Flask server)
   String? customBackendUrl;
 
+  String? get effectiveBackend {
+    if (customBackendUrl != null && customBackendUrl!.isNotEmpty) {
+      return customBackendUrl;
+    }
+    if (kIsWeb) {
+      return Uri.base.origin;
+    }
+    return null;
+  }
+
   final Map<String, String> defaultHeaders = {
     'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -27,11 +38,11 @@ class ScraperService {
 
   // Fetch Latest Movies Feed
   Future<Map<String, dynamic>> fetchLatestMovies({int page = 1}) async {
-    // If custom backend is set, query backend API
-    if (customBackendUrl != null && customBackendUrl!.isNotEmpty) {
+    final backend = effectiveBackend;
+    if (backend != null && backend.isNotEmpty) {
       try {
-        final uri = Uri.parse('$customBackendUrl/api/latest?page=$page');
-        final resp = await http.get(uri).timeout(const Duration(seconds: 10));
+        final uri = Uri.parse('$backend/api/latest?page=$page');
+        final resp = await http.get(uri).timeout(const Duration(seconds: 12));
         if (resp.statusCode == 200) {
           final data = json.decode(resp.body);
           final list = (data['movies'] as List?)
@@ -45,7 +56,9 @@ class ScraperService {
           };
         }
       } catch (_) {
-        // Fallback to direct client scraping
+        if (kIsWeb) {
+          return {'movies': <Movie>[], 'page': page, 'has_next': false, 'error': 'Connection error to API'};
+        }
       }
     }
 
@@ -78,6 +91,32 @@ class ScraperService {
     final cleanQ = query.trim();
     if (cleanQ.isEmpty) {
       return {'movies': <Movie>[], 'page': page, 'has_next': false};
+    }
+
+    final backend = effectiveBackend;
+    if (backend != null && backend.isNotEmpty) {
+      try {
+        final uri = Uri.parse('$backend/api/search?q=${Uri.encodeQueryComponent(cleanQ)}&page=$page');
+        final resp = await http.get(uri).timeout(const Duration(seconds: 12));
+        if (resp.statusCode == 200) {
+          final data = json.decode(resp.body);
+          final list = (data['movies'] as List?)
+                  ?.map((e) => Movie.fromJson(e))
+                  .toList() ??
+              [];
+          return {
+            'movies': list,
+            'query': cleanQ,
+            'suggested_query': data['suggested_query'],
+            'page': page,
+            'has_next': data['has_next'] ?? false,
+          };
+        }
+      } catch (_) {
+        if (kIsWeb) {
+          return {'movies': <Movie>[], 'query': cleanQ, 'page': page, 'has_next': false, 'error': 'Search connection error'};
+        }
+      }
     }
 
     final encodedQ = Uri.encodeQueryComponent(cleanQ);
@@ -136,6 +175,32 @@ class ScraperService {
 
   // Fetch Full Movie Details & Screenshots & Downloads
   Future<MovieDetails> fetchMovieDetails(String slugOrUrl) async {
+    final backend = effectiveBackend;
+    if (backend != null && backend.isNotEmpty) {
+      try {
+        final uri = Uri.parse('$backend/api/detail?slug=${Uri.encodeQueryComponent(slugOrUrl)}');
+        final resp = await http.get(uri).timeout(const Duration(seconds: 14));
+        if (resp.statusCode == 200) {
+          final data = json.decode(resp.body);
+          return MovieDetails.fromJson(data);
+        }
+      } catch (_) {
+        if (kIsWeb) {
+          return MovieDetails(
+            title: 'Error',
+            cleanTitle: 'Failed to load details',
+            cleanYear: '',
+            poster: '',
+            metadata: {},
+            plot: '',
+            screenshots: [],
+            downloads: [],
+            error: 'Failed to connect to API',
+          );
+        }
+      }
+    }
+
     final targetUrl = slugOrUrl.startsWith('http') ? slugOrUrl : '$baseUrl$slugOrUrl/';
 
     try {
@@ -334,10 +399,28 @@ class ScraperService {
     }
   }
 
-  // Automated Direct Download Resolver (Indishare -> DriveHub -> Cloudflare R2 / Mirrors)
+  // Automated Direct Download Resolver
   Future<MirrorLinks> resolveDownloadLink(String intermediateUrl) async {
     if (_resolveCache.containsKey(intermediateUrl)) {
       return _resolveCache[intermediateUrl]!;
+    }
+
+    final backend = effectiveBackend;
+    if (backend != null && backend.isNotEmpty) {
+      try {
+        final uri = Uri.parse('$backend/api/resolve?url=${Uri.encodeQueryComponent(intermediateUrl)}');
+        final resp = await http.get(uri).timeout(const Duration(seconds: 14));
+        if (resp.statusCode == 200) {
+          final data = json.decode(resp.body);
+          final result = MirrorLinks.fromJson(data);
+          _resolveCache[intermediateUrl] = result;
+          return result;
+        }
+      } catch (_) {
+        if (kIsWeb) {
+          return MirrorLinks(status: 'error', error: 'Could not connect to resolver API');
+        }
+      }
     }
 
     try {

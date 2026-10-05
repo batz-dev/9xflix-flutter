@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import 'constants/app_theme.dart';
 import 'providers/movies_provider.dart';
@@ -9,19 +10,25 @@ import 'screens/main_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Dark navigation & status bar
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: AppTheme.surface,
-      systemNavigationBarIconBrightness: Brightness.light,
-    ),
-  );
+  // Dark navigation & status bar on mobile
+  if (!kIsWeb) {
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        systemNavigationBarColor: AppTheme.surface,
+        systemNavigationBarIconBrightness: Brightness.light,
+      ),
+    );
+  }
 
-  // Initialize download manager & persistence
-  final downloadManager = DownloadManager();
-  await downloadManager.init();
+  // Initialize download manager with try-catch so web never blocks UI
+  try {
+    final downloadManager = DownloadManager();
+    await downloadManager.init();
+  } catch (e) {
+    debugPrint('DownloadManager init note: $e');
+  }
 
   runApp(const FlixDirectApp());
 }

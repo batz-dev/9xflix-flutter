@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:open_filex/open_filex.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/download_item.dart';
+import 'platform/download_storage.dart';
+
+export 'platform/download_storage.dart' show OpenMediaResult;
 
 class DownloadManager extends ChangeNotifier {
   static final DownloadManager _instance = DownloadManager._internal();
@@ -37,7 +37,9 @@ class DownloadManager extends ChangeNotifier {
 
   Future<void> init() async {
     await _loadPersistedItems();
-    await _verifyLocalFiles();
+    if (!kIsWeb) {
+      await _verifyLocalFiles();
+    }
   }
 
   // Start new download
@@ -52,9 +54,7 @@ class DownloadManager extends ChangeNotifier {
     final ext = downloadUrl.contains('.mkv') ? '.mkv' : '.mp4';
     final fileName = '${sanitizedTitle}_$quality$ext';
 
-    final saveDir = await _getDownloadDirectory();
-    final savePath = '${saveDir.path}/$fileName';
-
+    final savePath = await DownloadStorage.instance.getDownloadSavePath(fileName);
     final id = DateTime.now().millisecondsSinceEpoch.toString();
 
     final item = DownloadItem(
@@ -73,11 +73,30 @@ class DownloadManager extends ChangeNotifier {
     notifyListeners();
     await _persistItems();
 
+    if (kIsWeb) {
+      await DownloadStorage.instance.openDownloadedItem(savePath, downloadUrl);
+      item.status = DownloadStatus.completed;
+      item.progress = 1.0;
+      item.speed = 'Browser Download';
+      notifyListeners();
+      await _persistItems();
+      return item;
+    }
+
     _executeDownload(item);
     return item;
   }
 
   Future<void> _executeDownload(DownloadItem item) async {
+    if (kIsWeb) {
+      item.status = DownloadStatus.completed;
+      item.progress = 1.0;
+      item.speed = 'Browser Download';
+      notifyListeners();
+      await _persistItems();
+      return;
+    }
+
     final cancelToken = CancelToken();
     _cancelTokens[item.id] = cancelToken;
 
@@ -88,11 +107,7 @@ class DownloadManager extends ChangeNotifier {
     _lastSpeedBytes[item.id] = 0;
 
     try {
-      final file = File(item.savePath);
-      int startBytes = 0;
-      if (await file.exists()) {
-        startBytes = await file.length();
-      }
+      final startBytes = await DownloadStorage.instance.getFileLength(item.savePath);
 
       final options = Options(
         responseType: ResponseType.stream,
@@ -112,48 +127,44 @@ class DownloadManager extends ChangeNotifier {
       total += startBytes;
       item.totalBytes = total;
 
-      final raf = await file.open(mode: startBytes > 0 ? FileMode.append : FileMode.write);
-      final stream = response.data!.stream;
-
       int received = startBytes;
+      await DownloadStorage.instance.saveStreamToFile(
+        stream: response.data!.stream,
+        filePath: item.savePath,
+        append: startBytes > 0,
+        isCancelled: () => cancelToken.isCancelled,
+        onChunk: (chunkLen) {
+          received += chunkLen;
+          item.receivedBytes = received;
 
-      await for (final chunk in stream) {
-        if (cancelToken.isCancelled) {
-          await raf.close();
-          return;
-        }
-
-        await raf.writeFrom(chunk);
-        received += chunk.length;
-        item.receivedBytes = received;
-
-        if (total > 0) {
-          item.progress = received / total;
-        }
-
-        // Calculate download speed every 500ms
-        final now = DateTime.now();
-        final lastTime = _lastSpeedTimes[item.id] ?? now;
-        final elapsed = now.difference(lastTime).inMilliseconds;
-
-        if (elapsed >= 600) {
-          final lastBytes = _lastSpeedBytes[item.id] ?? 0;
-          final bytesDiff = received - lastBytes;
-          final speedBytesPerSec = (bytesDiff / (elapsed / 1000.0));
-
-          if (speedBytesPerSec > 1024 * 1024) {
-            item.speed = '${(speedBytesPerSec / (1024 * 1024)).toStringAsFixed(1)} MB/s';
-          } else {
-            item.speed = '${(speedBytesPerSec / 1024).toStringAsFixed(0)} KB/s';
+          if (total > 0) {
+            item.progress = received / total;
           }
 
-          _lastSpeedTimes[item.id] = now;
-          _lastSpeedBytes[item.id] = received;
-          notifyListeners();
-        }
-      }
+          // Calculate download speed every 600ms
+          final now = DateTime.now();
+          final lastTime = _lastSpeedTimes[item.id] ?? now;
+          final elapsed = now.difference(lastTime).inMilliseconds;
 
-      await raf.close();
+          if (elapsed >= 600) {
+            final lastBytes = _lastSpeedBytes[item.id] ?? 0;
+            final bytesDiff = received - lastBytes;
+            final speedBytesPerSec = (bytesDiff / (elapsed / 1000.0));
+
+            if (speedBytesPerSec > 1024 * 1024) {
+              item.speed = '${(speedBytesPerSec / (1024 * 1024)).toStringAsFixed(1)} MB/s';
+            } else {
+              item.speed = '${(speedBytesPerSec / 1024).toStringAsFixed(0)} KB/s';
+            }
+
+            _lastSpeedTimes[item.id] = now;
+            _lastSpeedBytes[item.id] = received;
+            notifyListeners();
+          }
+        },
+      );
+
+      if (cancelToken.isCancelled) return;
 
       item.status = DownloadStatus.completed;
       item.progress = 1.0;
@@ -218,11 +229,8 @@ class DownloadManager extends ChangeNotifier {
     final idx = _items.indexWhere((i) => i.id == id);
     if (idx != -1) {
       final item = _items[idx];
-      final file = File(item.savePath);
-      if (await file.exists()) {
-        try {
-          await file.delete();
-        } catch (_) {}
+      if (!kIsWeb) {
+        await DownloadStorage.instance.deleteFile(item.savePath);
       }
       _items.removeAt(idx);
       notifyListeners();
@@ -230,37 +238,14 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
-  // Open / Play downloaded video file in external video player (VLC / MX Player)
-  Future<OpenResult> openFile(String id) async {
+  // Open / Play downloaded video file or stream
+  Future<OpenMediaResult> openFile(String id) async {
     final idx = _items.indexWhere((i) => i.id == id);
     if (idx != -1) {
       final item = _items[idx];
-      return await OpenFilex.open(item.savePath);
+      return await DownloadStorage.instance.openDownloadedItem(item.savePath, item.downloadUrl);
     }
-    return OpenResult(type: ResultType.fileNotFound, message: 'Item not found');
-  }
-
-  // Directory handling
-  Future<Directory> _getDownloadDirectory() async {
-    Directory? dir;
-    try {
-      if (Platform.isAndroid) {
-        dir = Directory('/storage/emulated/0/Download/FlixDirect');
-        if (!await dir.exists()) {
-          await dir.create(recursive: true);
-        }
-        return dir;
-      }
-    } catch (_) {
-      // Fallback
-    }
-
-    dir = await getApplicationDocumentsDirectory();
-    final subDir = Directory('${dir.path}/FlixDirect');
-    if (!await subDir.exists()) {
-      await subDir.create(recursive: true);
-    }
-    return subDir;
+    return const OpenMediaResult(false, 'Item not found');
   }
 
   // Persistence
@@ -287,10 +272,11 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<void> _verifyLocalFiles() async {
+    if (kIsWeb) return;
     for (final item in _items) {
       if (item.status == DownloadStatus.completed) {
-        final file = File(item.savePath);
-        if (!await file.exists()) {
+        final exists = await DownloadStorage.instance.fileExists(item.savePath);
+        if (!exists) {
           item.status = DownloadStatus.failed;
           item.speed = 'File deleted';
         }
