@@ -40,28 +40,27 @@ jobs:
 
       - name: Rename APK for Release
         run: |
-          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/FlixDirect-v1.0.3.apk
+          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/FlixDirect-v1.0.4.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: FlixDirect-Release-APK
-          path: build/app/outputs/flutter-apk/FlixDirect-v1.0.3.apk
+          path: build/app/outputs/flutter-apk/FlixDirect-v1.0.4.apk
 
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.3
-          name: "FlixDirect Mobile v1.0.3"
+          tag_name: v1.0.4
+          name: "FlixDirect Mobile v1.0.4"
           body: |
-            ### 🎬 FlixDirect v1.0.3 Update
-            - **Fixed Mirror Redirect Issue:** Clicking Gofile or any mirror row now directly downloads the actual high-speed video file instead of redirecting to the external website.
-            - **Same-Origin Direct Download Streaming:** Web version routes movie streams through a direct attachment downloader without opening blank tabs.
-            - **Disabled Web Cache & Stale Workers:** Auto-unregisters service worker and enforces no-cache headers so web updates load instantly.
-            - **PixelDrain Direct API Integration:** Automatically extracts direct 10Gbps stream endpoints.
+            ### 🎬 FlixDirect v1.0.4 Update
+            - **Direct Video Stream on Gofile & All Mirrors:** Clicking Download on Gofile or any mirror row triggers instant direct file download without redirecting to landing pages.
+            - **PixelDrain Direct API Integration:** Instant 10Gbps stream resolution fallback for movies when R2 sync is pending.
+            - **Fresh Link Bypassing:** Real-time stream resolution ensures all download links are fresh and active.
             - **Cloudflare R2 Direct Worker Priority:** Guarantees instant 0-wait downloads for Deadpool 2, Deadpool & Wolverine, Mirzapur, etc.
           files: |
-            build/app/outputs/flutter-apk/FlixDirect-v1.0.3.apk
+            build/app/outputs/flutter-apk/FlixDirect-v1.0.4.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -10,6 +10,7 @@ class MirrorLinks {
   final String? vikingfile;
   final String? uploadhub;
   final String? filepress;
+  final String? pixeldrain;
   final String? drivehubUrl;
   final String? error;
 
@@ -25,6 +26,7 @@ class MirrorLinks {
     this.vikingfile,
     this.uploadhub,
     this.filepress,
+    this.pixeldrain,
     this.drivehubUrl,
     this.error,
   });
@@ -44,33 +46,43 @@ class MirrorLinks {
       vikingfile: mirrors['vikingfile'],
       uploadhub: mirrors['uploadhub'],
       filepress: mirrors['filepress'],
+      pixeldrain: mirrors['pixeldrain'],
       drivehubUrl: json['drivehub_url'],
       error: json['error'],
     );
   }
 
-  bool isDirect(String? u) {
+  static bool isDirect(String? u) {
     if (u == null || u.isEmpty) return false;
     if (u.contains('gofile.io/d/') || u.contains('vikingfile.com') || u.contains('filepress')) return false;
     return u.contains('.mkv') ||
         u.contains('.mp4') ||
         u.contains('workers.dev') ||
-        u.contains('pixeldrain.com/api/file') ||
+        u.contains('pixeldrain.com') ||
         u.contains('hubcloud') ||
         u.contains('indi-files') ||
         u.contains('/api/gofile-dl') ||
         u.contains('/api/download');
   }
 
+  static String _formatDirectUrl(String url) {
+    if (url.contains('pixeldrain.com/u/')) {
+      final id = url.replaceAll(RegExp(r'/+$'), '').split('/').last;
+      return 'https://pixeldrain.com/api/file/$id';
+    }
+    return url;
+  }
+
   String? get bestDirectVideoUrl {
-    if (isDirect(directLink)) return directLink;
-    if (r2 != null && (r2Status == 'active' || r2Status == null) && isDirect(r2)) return r2;
-    if (isDirect(gofileDirect)) return gofileDirect;
+    if (isDirect(directLink)) return _formatDirectUrl(directLink!);
+    if (r2 != null && (r2Status == 'active' || r2Status == null) && isDirect(r2)) return _formatDirectUrl(r2!);
+    if (pixeldrain != null && isDirect(pixeldrain)) return _formatDirectUrl(pixeldrain!);
+    if (isDirect(gofileDirect)) return _formatDirectUrl(gofileDirect!);
     return null;
   }
 
   bool get hasDirectVideoUrl => bestDirectVideoUrl != null;
 
-  bool get hasActiveLinks => directLink != null || (r2 != null && (r2Status == 'active' || r2Status == null)) || gofile != null || vikingfile != null || filepress != null || uploadhub != null;
-  String? get bestDownloadUrl => bestDirectVideoUrl ?? directLink ?? ((r2 != null && (r2Status == 'active' || r2Status == null)) ? r2 : (gofileDirect ?? gofile ?? vikingfile ?? filepress));
+  bool get hasActiveLinks => directLink != null || (r2 != null && (r2Status == 'active' || r2Status == null)) || pixeldrain != null || gofile != null || vikingfile != null || filepress != null || uploadhub != null;
+  String? get bestDownloadUrl => bestDirectVideoUrl;
 }

@@ -34,9 +34,6 @@ class ScraperService {
     'Accept-Language': 'en-US,en;q=0.5',
   };
 
-  // Cache for resolved download links
-  final Map<String, MirrorLinks> _resolveCache = {};
-
   // Fetch Latest Movies Feed
   Future<Map<String, dynamic>> fetchLatestMovies({int page = 1}) async {
     final backend = effectiveBackend;
@@ -402,10 +399,6 @@ class ScraperService {
 
   // Automated Direct Download Resolver
   Future<MirrorLinks> resolveDownloadLink(String intermediateUrl) async {
-    if (_resolveCache.containsKey(intermediateUrl)) {
-      return _resolveCache[intermediateUrl]!;
-    }
-
     final backend = effectiveBackend;
     if (backend != null && backend.isNotEmpty) {
       try {
@@ -414,7 +407,6 @@ class ScraperService {
         if (resp.statusCode == 200) {
           final data = json.decode(resp.body);
           final result = MirrorLinks.fromJson(data);
-          _resolveCache[intermediateUrl] = result;
           return result;
         }
       } catch (_) {
@@ -490,7 +482,6 @@ class ScraperService {
                       r2: r2Data['url'],
                       r2Status: 'active',
                     );
-                    _resolveCache[intermediateUrl] = res;
                     return res;
                   }
                 }
@@ -498,14 +489,24 @@ class ScraperService {
 
               for (final m in RegExp(r'''openDownload\(\s*['"]([^'"]+)['"]''').allMatches(body)) {
                 final mUrl = m.group(1);
-                if (mUrl != null && (mUrl.contains('indi-files') || mUrl.contains('gofile') || mUrl.contains('vikingfile'))) {
-                  final res = MirrorLinks(
-                    status: 'success',
-                    directLink: mUrl,
-                    linkType: mUrl.contains('indi-files') ? 'IndiFiles Direct CDN' : 'Fast Mirror',
-                  );
-                  _resolveCache[intermediateUrl] = res;
-                  return res;
+                if (mUrl != null) {
+                  if (mUrl.contains('pixeldrain')) {
+                    final pxId = mUrl.replaceAll(RegExp(r'/+$'), '').split('/').last;
+                    final directPx = 'https://pixeldrain.com/api/file/$pxId';
+                    return MirrorLinks(
+                      status: 'success',
+                      directLink: directPx,
+                      linkType: 'PixelDrain High-Speed Direct CDN',
+                      r2: directPx,
+                      r2Status: 'active',
+                    );
+                  } else if (mUrl.contains('indi-files')) {
+                    return MirrorLinks(
+                      status: 'success',
+                      directLink: mUrl,
+                      linkType: 'IndiFiles Direct CDN',
+                    );
+                  }
                 }
               }
             }
@@ -538,18 +539,10 @@ class ScraperService {
               if (mirrorsData['r2'] != null && mirrorsData['r2_status'] == 'active') {
                 bestDirect = mirrorsData['r2'];
                 linkType = 'Cloudflare R2 Direct High-Speed';
-              } else if (mirrorsData['gofile'] != null) {
-                bestDirect = mirrorsData['gofile'];
-                linkType = 'Gofile Direct Fast Mirror';
-              } else if (mirrorsData['vikingfile'] != null) {
-                bestDirect = mirrorsData['vikingfile'];
-                linkType = 'VikingFile Fast Mirror';
-              } else if (mirrorsData['filepress'] != null) {
-                bestDirect = mirrorsData['filepress'];
-                linkType = 'FilePress';
-              } else {
-                bestDirect = drivehubUrl;
-                linkType = 'DriveHub Web Link';
+              } else if (mirrorsData['pixeldrain'] != null) {
+                final pxId = mirrorsData['pixeldrain'].toString().replaceAll(RegExp(r'/+$'), '').split('/').last;
+                bestDirect = 'https://pixeldrain.com/api/file/$pxId';
+                linkType = 'PixelDrain High-Speed Direct CDN';
               }
 
               final result = MirrorLinks(
@@ -562,10 +555,11 @@ class ScraperService {
                 vikingfile: mirrorsData['vikingfile'],
                 uploadhub: mirrorsData['uploadhub'],
                 filepress: mirrorsData['filepress'],
+                pixeldrain: mirrorsData['pixeldrain'] != null
+                    ? 'https://pixeldrain.com/api/file/${mirrorsData['pixeldrain'].toString().replaceAll(RegExp(r"/+$"), "").split("/").last}'
+                    : null,
                 drivehubUrl: drivehubUrl,
               );
-
-              _resolveCache[intermediateUrl] = result;
               return result;
             }
           }

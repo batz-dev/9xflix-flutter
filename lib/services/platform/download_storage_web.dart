@@ -48,14 +48,19 @@ class DownloadStorageWeb implements DownloadStorage {
             downloadUrl.contains('.mp4') ||
             downloadUrl.contains('workers.dev') ||
             downloadUrl.contains('hubcloud') ||
-            downloadUrl.contains('pixeldrain.com/api/file') ||
+            downloadUrl.contains('pixeldrain.com') ||
             downloadUrl.contains('indi-files') ||
             downloadUrl.contains('/api/gofile-dl') ||
             downloadUrl.contains('/api/download');
 
         if (isDirectMedia && !downloadUrl.startsWith('/api/') && !downloadUrl.contains('/api/download')) {
           final origin = html.window.location.origin;
-          finalUrl = '$origin/api/download?url=${Uri.encodeQueryComponent(downloadUrl)}&name=${Uri.encodeQueryComponent(fileName)}';
+          String targetUrl = downloadUrl;
+          if (targetUrl.contains('pixeldrain.com/u/')) {
+            final pxId = targetUrl.replaceAll(RegExp(r'/+$'), '').split('/').last;
+            targetUrl = 'https://pixeldrain.com/api/file/$pxId';
+          }
+          finalUrl = '$origin/api/download?url=${Uri.encodeQueryComponent(targetUrl)}&name=${Uri.encodeQueryComponent(fileName)}';
         }
 
         if (isDirectMedia) {

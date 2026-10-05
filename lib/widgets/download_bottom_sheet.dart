@@ -105,7 +105,7 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: AppTheme.surfaceElevated,
-          content: Text('Starting direct CDN download for ${widget.movieTitle}...'),
+          content: Text('Starting direct download for ${widget.movieTitle}...'),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -127,10 +127,23 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
       if (directUrl != null && directUrl.isNotEmpty) {
         _triggerDownload(directUrl);
       } else {
-        await DownloadStorage.instance.openDownloadedItem('', gofileUrl);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: AppTheme.surfaceElevated,
+            content: Text('Direct stream not ready yet for this mirror. Please use another mirror or retry.'),
+            duration: Duration(seconds: 3),
+          ),
+        );
       }
     } catch (_) {
-      await DownloadStorage.instance.openDownloadedItem('', gofileUrl);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: AppTheme.surfaceElevated,
+          content: Text('Could not start direct stream. Please try another mirror.'),
+          duration: Duration(seconds: 3),
+        ),
+      );
     } finally {
       if (mounted) {
         setState(() => _resolvingMirror = null);
@@ -139,14 +152,20 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
   }
 
   void _handleMirrorDownload(String name, String url) {
-    // 1. If url itself is direct video stream
-    if (url.contains('.mkv') ||
-        url.contains('.mp4') ||
-        url.contains('workers.dev') ||
-        url.contains('pixeldrain.com/api/file') ||
-        url.contains('hubcloud') ||
-        url.contains('indi-files')) {
-      _triggerDownload(url);
+    // 1. If url itself is direct video stream (or Pixeldrain)
+    String effectiveUrl = url;
+    if (url.contains('pixeldrain.com/u/')) {
+      final pxId = url.replaceAll(RegExp(r'/+$'), '').split('/').last;
+      effectiveUrl = 'https://pixeldrain.com/api/file/$pxId';
+    }
+
+    if (effectiveUrl.contains('.mkv') ||
+        effectiveUrl.contains('.mp4') ||
+        effectiveUrl.contains('workers.dev') ||
+        effectiveUrl.contains('pixeldrain.com/api/file') ||
+        effectiveUrl.contains('hubcloud') ||
+        effectiveUrl.contains('indi-files')) {
+      _triggerDownload(effectiveUrl);
       return;
     }
 
@@ -164,8 +183,14 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
       return;
     }
 
-    // 3. Web landing page
-    DownloadStorage.instance.openDownloadedItem('', url);
+    // 3. Inform user if stream is still synchronizing (don't redirect without asking)
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: AppTheme.surfaceElevated,
+        content: Text('Direct stream for $name is synchronizing. Use browser icon to visit host.'),
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   @override
@@ -381,6 +406,15 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
               ),
             ),
             const SizedBox(height: 8),
+
+            // PixelDrain
+            if (_links!.pixeldrain != null)
+              _buildMirrorRow(
+                name: 'PixelDrain Direct Mirror',
+                icon: Icons.bolt_rounded,
+                color: Colors.amber,
+                url: _links!.pixeldrain!,
+              ),
 
             // Gofile
             if (_links!.gofile != null)

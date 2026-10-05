@@ -284,10 +284,21 @@ def universal_resolve(intermediate_url: str) -> dict:
                 hosts = st_data.get('hosts', {})
                 for h_name, h_info in hosts.items():
                     if h_info.get('download_url'):
-                        result['mirrors'][h_name] = h_info['download_url']
-                        if not result['direct_link']:
-                            result['direct_link'] = h_info['download_url']
-                            result['link_type'] = f'{h_name.upper()} Mirror'
+                        dl_url = h_info['download_url']
+                        if h_name == 'pixeldrain' or 'pixeldrain' in dl_url:
+                            px_id = dl_url.rstrip('/').split('/')[-1]
+                            direct_px = f'https://pixeldrain.com/api/file/{px_id}'
+                            result['mirrors']['pixeldrain'] = direct_px
+                            if not result['direct_link']:
+                                result['direct_link'] = direct_px
+                                result['link_type'] = 'PixelDrain High-Speed Direct CDN'
+                        elif h_name == 'indifiles' or 'indi-files' in dl_url:
+                            result['mirrors']['indifiles'] = dl_url
+                            if not result['direct_link']:
+                                result['direct_link'] = dl_url
+                                result['link_type'] = 'IndiFiles Direct CDN'
+                        else:
+                            result['mirrors'][h_name] = dl_url
         except Exception:
             pass
 
@@ -301,7 +312,7 @@ def universal_resolve(intermediate_url: str) -> dict:
         except Exception:
             pass
 
-    if result.get('direct_link'):
+    if result.get('direct_link') or (result.get('mirrors') and len(result['mirrors']) > 0):
         result['status'] = 'success'
         result['error'] = None
     else:
