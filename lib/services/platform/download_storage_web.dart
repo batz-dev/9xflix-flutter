@@ -41,13 +41,34 @@ class DownloadStorageWeb implements DownloadStorage {
   Future<OpenMediaResult> openDownloadedItem(String filePath, String downloadUrl) async {
     if (downloadUrl.isNotEmpty) {
       try {
-        final anchor = html.AnchorElement(href: downloadUrl)
-          ..target = '_blank'
-          ..download = filePath.split('/').last;
-        html.document.body?.children.add(anchor);
-        anchor.click();
-        anchor.remove();
-        return const OpenMediaResult(true, 'Started download');
+        final fileName = filePath.split('/').last;
+        String finalUrl = downloadUrl;
+
+        final isDirectMedia = downloadUrl.contains('.mkv') ||
+            downloadUrl.contains('.mp4') ||
+            downloadUrl.contains('workers.dev') ||
+            downloadUrl.contains('hubcloud') ||
+            downloadUrl.contains('pixeldrain.com/api/file') ||
+            downloadUrl.contains('indi-files') ||
+            downloadUrl.contains('/api/gofile-dl') ||
+            downloadUrl.contains('/api/download');
+
+        if (isDirectMedia && !downloadUrl.startsWith('/api/') && !downloadUrl.contains('/api/download')) {
+          final origin = html.window.location.origin;
+          finalUrl = '$origin/api/download?url=${Uri.encodeQueryComponent(downloadUrl)}&name=${Uri.encodeQueryComponent(fileName)}';
+        }
+
+        if (isDirectMedia) {
+          final anchor = html.AnchorElement(href: finalUrl)
+            ..download = fileName;
+          html.document.body?.children.add(anchor);
+          anchor.click();
+          anchor.remove();
+          return const OpenMediaResult(true, 'Started download');
+        } else {
+          html.window.open(downloadUrl, '_blank');
+          return const OpenMediaResult(true, 'Opened link in new tab');
+        }
       } catch (e) {
         try {
           html.window.open(downloadUrl, '_blank');

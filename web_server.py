@@ -222,24 +222,27 @@ def universal_resolve(intermediate_url: str) -> dict:
                                 result['mirrors']['r2'] = r2_data['url']
                                 result['mirrors']['r2_status'] = 'active'
 
-                    # 3b. Extract openDownload mirrors (IndiFiles, GoFile, VikingFile)
+                    # 3b. Extract openDownload mirrors (Pixeldrain, IndiFiles, GoFile, VikingFile)
                     for m_od in re.finditer(r'openDownload\(\s*[\'\"]([^\'\"]+)[\'\"]', r_dl.text):
                         m_url = m_od.group(1)
-                        if 'indi-files' in m_url:
+                        if 'pixeldrain' in m_url:
+                            px_id = m_url.rstrip('/').split('/')[-1]
+                            direct_px = f'https://pixeldrain.com/api/file/{px_id}'
+                            result['mirrors']['pixeldrain'] = direct_px
+                            if not result['direct_link']:
+                                result['direct_link'] = direct_px
+                                result['link_type'] = 'PixelDrain High-Speed Direct CDN'
+                                result['mirrors']['r2'] = direct_px
+                                result['mirrors']['r2_status'] = 'active'
+                        elif 'indi-files' in m_url:
                             result['mirrors']['indifiles'] = m_url
                             if not result['direct_link']:
                                 result['direct_link'] = m_url
                                 result['link_type'] = 'IndiFiles Direct CDN'
                         elif 'gofile' in m_url:
                             result['mirrors']['gofile'] = m_url
-                            if not result['direct_link']:
-                                result['direct_link'] = m_url
-                                result['link_type'] = 'Gofile Fast Mirror'
                         elif 'vikingfile' in m_url:
                             result['mirrors']['vikingfile'] = m_url
-                            if not result['direct_link']:
-                                result['direct_link'] = m_url
-                                result['link_type'] = 'VikingFile Fast Mirror'
     except Exception:
         pass
 
@@ -263,12 +266,10 @@ def universal_resolve(intermediate_url: str) -> dict:
                         if mirrors.get('r2') and mirrors.get('r2_status') == 'active':
                             result['direct_link'] = mirrors['r2']
                             result['link_type'] = 'Cloudflare R2 Direct High-Speed'
-                        elif mirrors.get('gofile'):
-                            result['direct_link'] = mirrors['gofile']
-                            result['link_type'] = 'Gofile Fast Mirror'
-                        elif mirrors.get('vikingfile'):
-                            result['direct_link'] = mirrors['vikingfile']
-                            result['link_type'] = 'VikingFile Fast Mirror'
+                        elif mirrors.get('pixeldrain'):
+                            px_id = mirrors['pixeldrain'].rstrip('/').split('/')[-1]
+                            result['direct_link'] = f'https://pixeldrain.com/api/file/{px_id}'
+                            result['link_type'] = 'PixelDrain Direct High-Speed'
         except Exception:
             pass
 
@@ -430,14 +431,60 @@ def api_gofile_dl():
     except Exception as e:
         return f"Streaming error: {e}", 500
 
+@app.route('/api/download')
+def api_download():
+    url = request.args.get('url', '').strip()
+    name = request.args.get('name', 'movie.mkv').strip()
+    if not url:
+        return "Missing url parameter", 400
+
+    safe_name = re.sub(r'[\\/*?:"<>|]', '_', name)
+    if not safe_name.endswith('.mkv') and not safe_name.endswith('.mp4'):
+        safe_name += '.mkv'
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    }
+
+    range_header = request.headers.get('Range')
+    if range_header:
+        headers['Range'] = range_header
+
+    try:
+        r = requests.get(url, headers=headers, stream=True, timeout=25, allow_redirects=True)
+        excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
+        resp_headers = [(k, v) for (k, v) in r.raw.headers.items()
+                        if k.lower() not in excluded_headers]
+
+        resp_headers.append(('Content-Disposition', f'attachment; filename="{safe_name}"'))
+        resp_headers.append(('Access-Control-Allow-Origin', '*'))
+        resp_headers.append(('Accept-Ranges', 'bytes'))
+        if 'content-length' in r.headers:
+            resp_headers.append(('Content-Length', r.headers['content-length']))
+        if 'content-range' in r.headers:
+            resp_headers.append(('Content-Range', r.headers['content-range']))
+
+        def generate():
+            for chunk in r.iter_content(chunk_size=128 * 1024):
+                if chunk:
+                    yield chunk
+
+        return Response(generate(), status=r.status_code, headers=resp_headers)
+    except Exception as e:
+        return f"Download streaming error: {e}", 500
 
 # Catch-all to serve Flutter Web SPA and its static assets
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve_flutter(path):
     if path != "" and os.path.exists(os.path.join(WEB_DIR, path)):
-        return send_from_directory(WEB_DIR, path)
-    return send_from_directory(WEB_DIR, 'index.html')
+        resp = send_from_directory(WEB_DIR, path)
+    else:
+        resp = send_from_directory(WEB_DIR, 'index.html')
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))

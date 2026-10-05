@@ -99,6 +99,21 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
   }
 
   Future<void> _handleGofileDownload(String gofileUrl) async {
+    // 1. If high-speed direct CDN stream (R2, HubCloud, Pixeldrain) is already available:
+    final directStream = _links?.bestDirectVideoUrl;
+    if (directStream != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppTheme.surfaceElevated,
+          content: Text('Starting direct CDN download for ${widget.movieTitle}...'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      _triggerDownload(directStream);
+      return;
+    }
+
+    // 2. Otherwise try to resolve Gofile streaming link
     setState(() => _resolvingMirror = 'gofile');
     try {
       final provider = Provider.of<MoviesProvider>(context, listen: false);
@@ -111,22 +126,11 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
 
       if (directUrl != null && directUrl.isNotEmpty) {
         _triggerDownload(directUrl);
-      } else if (_links?.bestDownloadUrl != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            backgroundColor: AppTheme.surfaceElevated,
-            content: Text('Starting high-speed direct CDN download...'),
-            duration: Duration(seconds: 2),
-          ),
-        );
-        _triggerDownload(_links!.bestDownloadUrl!);
       } else {
         await DownloadStorage.instance.openDownloadedItem('', gofileUrl);
       }
     } catch (_) {
-      if (mounted && _links?.bestDownloadUrl != null) {
-        _triggerDownload(_links!.bestDownloadUrl!);
-      }
+      await DownloadStorage.instance.openDownloadedItem('', gofileUrl);
     } finally {
       if (mounted) {
         setState(() => _resolvingMirror = null);
@@ -135,13 +139,20 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
   }
 
   void _handleMirrorDownload(String name, String url) {
+    // 1. If url itself is direct video stream
     if (url.contains('.mkv') ||
         url.contains('.mp4') ||
         url.contains('workers.dev') ||
+        url.contains('pixeldrain.com/api/file') ||
         url.contains('hubcloud') ||
         url.contains('indi-files')) {
       _triggerDownload(url);
-    } else if (_links?.bestDownloadUrl != null) {
+      return;
+    }
+
+    // 2. If direct video stream is available for this movie
+    final directStream = _links?.bestDirectVideoUrl;
+    if (directStream != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: AppTheme.surfaceElevated,
@@ -149,10 +160,12 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
           duration: const Duration(seconds: 2),
         ),
       );
-      _triggerDownload(_links!.bestDownloadUrl!);
-    } else {
-      DownloadStorage.instance.openDownloadedItem('', url);
+      _triggerDownload(directStream);
+      return;
     }
+
+    // 3. Web landing page
+    DownloadStorage.instance.openDownloadedItem('', url);
   }
 
   @override
