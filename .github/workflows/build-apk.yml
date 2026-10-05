@@ -1,0 +1,71 @@
+name: Build Android APK & Release
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Flutter APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze Project
+        run: flutter analyze
+
+      - name: Run Tests
+        run: flutter test
+
+      - name: Build Release APK
+        run: flutter build apk --release --android-skip-build-dependency-validation
+
+      - name: Rename APK for Release
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/FlixDirect-v1.0.0.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlixDirect-Release-APK
+          path: build/app/outputs/flutter-apk/FlixDirect-v1.0.0.apk
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: "FlixDirect Mobile v1.0.0"
+          body: |
+            ### 🎬 FlixDirect v1.0.0 Release
+            - **Automated Cloudflare R2 Resolver:** Bypasses 9xflix ads, timers, and shorteners.
+            - **Built-in High-Speed Downloader:** Resume support, speed meter, and chunked downloads.
+            - **Screenshots Gallery & Lightbox:** Pinch-to-zoom uncropped screenshots.
+            - **Cinematic Dark Theme:** Optimized for Android phones and tablets.
+          files: |
+            build/app/outputs/flutter-apk/FlixDirect-v1.0.0.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
