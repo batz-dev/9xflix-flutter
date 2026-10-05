@@ -223,16 +223,29 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
               ),
             ),
             const SizedBox(height: 12),
-            Center(
-              child: TextButton.icon(
-                onPressed: _resolveLink,
-                icon: const Icon(Icons.refresh_rounded, size: 16, color: AppTheme.primary),
-                label: const Text('Try Again', style: TextStyle(color: AppTheme.primary)),
-              ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                TextButton.icon(
+                  onPressed: _resolveLink,
+                  icon: const Icon(Icons.refresh_rounded, size: 16, color: AppTheme.primary),
+                  label: const Text('Try Again', style: TextStyle(color: AppTheme.primary)),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  onPressed: () => _triggerDownload(widget.option.intermediateUrl),
+                  icon: const Icon(Icons.open_in_browser_rounded, size: 16),
+                  label: const Text('Open Host Directly', style: TextStyle(fontSize: 12)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.surfaceElevated,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ],
             ),
           ] else if (_links != null) ...[
-            // Cloudflare R2 Direct Card
-            if (_links!.r2 != null && _links!.r2Status == 'active') ...[
+            // Direct High-Speed Download Card
+            if (_links!.bestDownloadUrl != null) ...[
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -251,19 +264,19 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
                       child: const Icon(Icons.bolt_rounded, color: AppTheme.accentGreen, size: 22),
                     ),
                     const SizedBox(width: 12),
-                    const Expanded(
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Cloudflare R2 Direct CDN',
-                            style: TextStyle(
+                            _links!.linkType ?? 'Cloudflare R2 Direct CDN',
+                            style: const TextStyle(
                               color: AppTheme.accentGreen,
                               fontSize: 13,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-                          Text(
+                          const Text(
                             'Highest speed, 0 waiting time, resume support',
                             style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
                           ),
@@ -271,7 +284,7 @@ class _DownloadBottomSheetState extends State<DownloadBottomSheet> {
                       ),
                     ),
                     ElevatedButton(
-                      onPressed: () => _triggerDownload(_links!.r2!),
+                      onPressed: () => _triggerDownload(_links!.bestDownloadUrl!),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppTheme.accentGreen,
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),

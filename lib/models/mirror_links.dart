@@ -27,7 +27,7 @@ class MirrorLinks {
 
   factory MirrorLinks.fromJson(Map<String, dynamic> json) {
     final mirrors = json['mirrors'] as Map<String, dynamic>? ?? {};
-    
+
     return MirrorLinks(
       status: json['status'] ?? 'error',
       directLink: json['direct_link'],
@@ -43,6 +43,6 @@ class MirrorLinks {
     );
   }
 
-  bool get hasActiveLinks => (r2 != null && r2Status == 'active') || gofile != null || vikingfile != null || filepress != null || uploadhub != null;
-  String? get bestDownloadUrl => (r2 != null && r2Status == 'active') ? r2 : (gofile ?? vikingfile ?? filepress ?? directLink);
+  bool get hasActiveLinks => directLink != null || (r2 != null && (r2Status == 'active' || r2Status == null)) || gofile != null || vikingfile != null || filepress != null || uploadhub != null;
+  String? get bestDownloadUrl => directLink ?? ((r2 != null && (r2Status == 'active' || r2Status == null)) ? r2 : (gofile ?? vikingfile ?? filepress));
 }

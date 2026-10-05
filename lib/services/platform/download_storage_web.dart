@@ -41,10 +41,20 @@ class DownloadStorageWeb implements DownloadStorage {
   Future<OpenMediaResult> openDownloadedItem(String filePath, String downloadUrl) async {
     if (downloadUrl.isNotEmpty) {
       try {
-        html.window.open(downloadUrl, '_blank');
-        return const OpenMediaResult(true, 'Opened stream in new tab');
+        final anchor = html.AnchorElement(href: downloadUrl)
+          ..target = '_blank'
+          ..download = filePath.split('/').last;
+        html.document.body?.children.add(anchor);
+        anchor.click();
+        anchor.remove();
+        return const OpenMediaResult(true, 'Started download');
       } catch (e) {
-        return OpenMediaResult(false, e.toString());
+        try {
+          html.window.open(downloadUrl, '_blank');
+          return const OpenMediaResult(true, 'Opened link in new tab');
+        } catch (e2) {
+          return OpenMediaResult(false, e2.toString());
+        }
       }
     }
     return const OpenMediaResult(false, 'No URL available');
