@@ -29,15 +29,19 @@ def add_cors_headers(response):
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
     return response
 
-def make_proxy_img(u: str, host_prefix: str) -> str:
-    if not u or not u.startswith('http'):
+def make_proxy_img(u, host_prefix: str):
+    if isinstance(u, dict):
+        if 'image_url' in u and isinstance(u['image_url'], str):
+            u['image_url'] = make_proxy_img(u['image_url'], host_prefix)
+        return u
+    if not isinstance(u, str) or not u.startswith('http'):
         return u
     if '/api/image-proxy' in u:
         return u
     return f"{host_prefix}/api/image-proxy?url={urllib.parse.quote(u, safe='')}"
 
 def rewrite_movie_images(movie_dict: dict, host_prefix: str):
-    if 'poster' in movie_dict and movie_dict['poster']:
+    if 'poster' in movie_dict and isinstance(movie_dict['poster'], str):
         movie_dict['poster'] = make_proxy_img(movie_dict['poster'], host_prefix)
     if 'screenshots' in movie_dict and isinstance(movie_dict['screenshots'], list):
         movie_dict['screenshots'] = [make_proxy_img(ss, host_prefix) for ss in movie_dict['screenshots']]
